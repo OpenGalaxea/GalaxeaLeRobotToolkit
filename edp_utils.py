@@ -90,7 +90,7 @@ def get_raw_data_meta():
     dataset_name = os.getenv('RAW_DATA_SET_NAME')
     version = os.getenv('VERSION')
     cache_dir = "/edp-workspace/instance-env/"
-    url = f"https://edp.galaxea-ai.com/edp-app-be/backend/v1/business/training-data-set/get-meta?rawDataSetName={dataset_name}&version={version}"
+    url = f"http://edp-app-backend-service.edp:8081/edp-app-be/backend/v1/business/training-data-set/get-meta?rawDataSetName={dataset_name}&version={version}"
     payload = {}
     cal_auth_value = cal_auth(ak, sk)
     headers = {
@@ -105,7 +105,7 @@ def get_raw_data_meta():
 def get_raw_data_by_bag_name(bag_name):
     ak = os.getenv('EDP_AK')
     sk = os.getenv('EDP_SK')
-    url = "https://edp.galaxea-ai.com/edp-app-be/backend/v1/business/raw-data/query"
+    url = "http://edp-app-backend-service.edp:8081/edp-app-be/backend/v1/business/raw-data/query"
     payload = json.dumps({
         "bagName": bag_name,
         "pageNum": 1,

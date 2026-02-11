@@ -660,7 +660,11 @@ def get_raw_data_meta_from_args():
     dataset_name = args.dataset_name
     robot_type = args.robot_type
     output_dir = args.output_dir
-    cache_dir = output_dir
+    cache_dir = f"/tmp/{args.dataset_name}/"
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+    os.makedirs(cache_dir)
+
     data_path_list = search_rosbags(args.input_dir)
 
     raw_data_meta_path = os.path.join(args.input_dir, "raw_data_meta.json")

@@ -243,7 +243,6 @@ class DataConverter:
                         add_to_tar(tar, file)
                     except Exception as e:
                         print(f"Error adding {file} to tar: {e}")
-            shutil.move(output_tar, self.output_dir)
 
     def process(
             self, 

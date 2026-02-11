@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 from channels_definition import *
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from edp_utils import get_raw_data_meta, get_raw_data_by_bag_name
 import numpy as np
 from pyquaternion import Quaternion as pyQuaternion
 from scipy.interpolate import interp1d
@@ -688,7 +689,10 @@ def format_shelf_string(s):
     return result
 
 if __name__ == '__main__':
-    raw_data_meta_json, output_dir = get_raw_data_meta_from_args()
+    if os.path.exists("/edp-workspace/instance-env/"):
+        raw_data_meta_json, cache_dir, output_dir = get_raw_data_meta()
+    else:
+        raw_data_meta_json, cache_dir, output_dir = get_raw_data_meta_from_args()
 
     mcaps_dict = raw_data_meta_json['data']
     dataset_name = mcaps_dict['rawDataSetName']

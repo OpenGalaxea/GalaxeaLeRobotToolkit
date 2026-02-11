@@ -252,7 +252,7 @@ class DataConverter:
         ):
         start_time = time.time()
         mcap_path = mcap_info["path"]
-        processed_msgs = extract(mcap_path)
+        processed_msgs = extract(mcap_path, self.use_ros1, self.TARGET_TOPICS)
         head_rgb_timestamps = np.array([self.msg_to_timestamp(msg) for msg in processed_msgs[RGB_HEAD_LEFT_TOPIC]])
         fps = int(np.round(1.0 / np.median(head_rgb_timestamps[1:] - head_rgb_timestamps[:-1])))
         self.fps_dict[str(idx)] = fps

@@ -244,6 +244,7 @@ class DataConverter:
                         add_to_tar(tar, file)
                     except Exception as e:
                         print(f"Error adding {file} to tar: {e}")
+            print(f"What exactly is output dir? {self.output_dir}")
             shutil.move(output_tar, self.output_dir)
 
     def process(
@@ -726,7 +727,9 @@ if __name__ == '__main__':
         training_data_set_meta_file = os.path.join(output_dir, 'training_data_set_meta.json')
         with open(training_data_set_meta_file, "w", encoding="utf-8") as f:
             json.dump(mcaps_dict, f, indent=4)
+        print("You really get it here?")
     except Exception as e:
+        print("No you dont")
         logger.error(f'Error writing {training_data_set_meta_file}, {e}')
 
     data_converter = DataConverter(

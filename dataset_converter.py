@@ -244,7 +244,6 @@ class DataConverter:
                         add_to_tar(tar, file)
                     except Exception as e:
                         print(f"Error adding {file} to tar: {e}")
-            print(f"What exactly is output dir? {self.output_dir}")
             shutil.move(output_tar, self.output_dir)
 
     def process(
@@ -661,6 +660,7 @@ def get_raw_data_meta_from_args():
     dataset_name = args.dataset_name
     robot_type = args.robot_type
     output_dir = args.output_dir
+    cache_dir = args.cache_dir
     data_path_list = search_rosbags(args.input_dir)
 
     raw_data_meta_path = os.path.join(args.input_dir, "raw_data_meta.json")
@@ -681,7 +681,7 @@ def get_raw_data_meta_from_args():
             raw_data_meta_dict["rawDataList"].append(data_meta)
 
         raw_data_meta_json = dict(data=raw_data_meta_dict)
-    return (raw_data_meta_json, output_dir)
+    return (raw_data_meta_json, cache_dir, output_dir)
 
 def format_shelf_string(s):
     parts = s.split('_')
@@ -727,7 +727,6 @@ if __name__ == '__main__':
         training_data_set_meta_file = os.path.join(cache_dir, 'training_data_set_meta.json')
         with open(training_data_set_meta_file, "w", encoding="utf-8") as f:
             json.dump(mcaps_dict, f, indent=4)
-        print("You really get it here?")
     except Exception as e:
         print("No you dont")
         logger.error(f'Error writing {training_data_set_meta_file}, {e}')

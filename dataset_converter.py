@@ -60,7 +60,8 @@ class DataConverter:
             robot_type, 
             sample_mcap_path, 
             dataset_name, 
-            output_dir, 
+            output_dir,
+            cache_dir,
             use_ros1 = False, 
             save_video = False, 
             use_h264 = False, 
@@ -72,6 +73,7 @@ class DataConverter:
 
         self.dataset_name = dataset_name
         self.output_dir = os.path.join(output_dir, self.dataset_name)
+        self.cache_dir = cache_dir
         if os.path.exists(self.output_dir):
             shutil.rmtree(self.output_dir)
         os.makedirs(self.output_dir)
@@ -230,19 +232,19 @@ class DataConverter:
             break
         
     def compress_lerobot_ds(self,):
-        # Unless otherwise specified, for user on EDP, to download with ease, we need a tar file.
         if self.use_compression:
             def add_to_tar(tar, file_path):
                 tar.add(file_path, arcname=os.path.basename(file_path))
-            files = [os.path.join(self.output_dir, self.dataset_name), 
-                    os.path.join(self.output_dir, "training_data_set_meta.json")]
-            output_tar = os.path.join(self.output_dir, f"{self.dataset_name}.tar.gz")
+            files = [os.path.join(self.cache_dir, self.dataset_name), 
+                    os.path.join(self.cache_dir, "training_data_set_meta.json")]
+            output_tar = os.path.join(self.cache_dir, f"{self.dataset_name}.tar.gz")
             with tarfile.open(output_tar, "w:gz") as tar:
                 for file in files:
                     try:
                         add_to_tar(tar, file)
                     except Exception as e:
                         print(f"Error adding {file} to tar: {e}")
+            shutil.move(output_tar, self.output_dir)
 
     def process(
             self, 
@@ -431,7 +433,7 @@ class DataConverter:
             repo_id=f'Galaxea/{self.dataset_name}_{idx}',
             features=features,
             robot_type=self.robot_type,
-            root=os.path.join(self.output_dir, self.dataset_name) + f'_{idx}',
+            root=os.path.join(self.cache_dir, self.dataset_name) + f'_{idx}',
             fps=fps,
         )
 
@@ -492,12 +494,12 @@ class DataConverter:
     
     def merge_subdataset(self,):
         subdatasets = []
-        for entry in os.scandir(self.output_dir):
+        for entry in os.scandir(self.cache_dir):
             if entry.is_dir():
                 full_path = entry.path
                 subdatasets.append(full_path)
         subdatasets = sorted(subdatasets)
-        logger.info(f'Start merging:\n {subdatasets}\n To: {self.output_dir}/{self.dataset_name}')
+        logger.info(f'Start merging:\n {subdatasets}\n To: {self.cache_dir}/{self.dataset_name}')
 
         sum_fps = 0
         count = 0
@@ -508,7 +510,7 @@ class DataConverter:
 
         merge_datasets(
             source_folders=subdatasets,
-            output_folder=os.path.join(self.output_dir, self.dataset_name),
+            output_folder=os.path.join(self.cache_dir, self.dataset_name),
             default_fps=mean_fps, 
         )
     
@@ -731,7 +733,8 @@ if __name__ == '__main__':
         robot_type, 
         sample_mcap_path, 
         dataset_name, 
-        output_dir, 
+        output_dir,
+        cache_dir,
         use_ros1=USE_ROS1, 
         save_video=SAVE_VIDEO, 
         use_h264=USE_H264, 

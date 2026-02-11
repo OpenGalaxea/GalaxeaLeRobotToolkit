@@ -724,7 +724,7 @@ if __name__ == '__main__':
         exit(1)
 
     try:
-        training_data_set_meta_file = os.path.join(output_dir, 'training_data_set_meta.json')
+        training_data_set_meta_file = os.path.join(cache_dir, 'training_data_set_meta.json')
         with open(training_data_set_meta_file, "w", encoding="utf-8") as f:
             json.dump(mcaps_dict, f, indent=4)
         print("You really get it here?")

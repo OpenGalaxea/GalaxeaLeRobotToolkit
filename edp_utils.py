@@ -120,18 +120,3 @@ def get_raw_data_by_bag_name(bag_name):
     data = json.loads(response.text)
     return data
 # get_raw_data_by_bag_name("RB250417001_20250805214344892_RAW.mcap")
-
-    
-# ========== 新增：动态获取Head节点IP ==========
-def get_host_ip():
-    """获取容器/本机的主网卡IP（eth0），排除回环地址"""
-    import socket
-    try:
-        # 创建UDP套接字（不实际连接，仅用于获取本机IP）
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # 连接任意外部地址（无需可达，仅用于触发网卡绑定）
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-    finally:
-        s.close()
-    return ip

@@ -235,8 +235,7 @@ class DataConverter:
         if self.use_compression:
             def add_to_tar(tar, file_path):
                 tar.add(file_path, arcname=os.path.basename(file_path))
-            files = [os.path.join(self.cache_dir, self.dataset_name), 
-                    os.path.join(self.cache_dir, "training_data_set_meta.json")]
+            files = [os.path.join(self.cache_dir, self.dataset_name)]
             output_tar = os.path.join(self.cache_dir, f"{self.dataset_name}.tar.gz")
             with tarfile.open(output_tar, "w:gz") as tar:
                 for file in files:

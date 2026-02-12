@@ -477,7 +477,7 @@ class DataConverter:
             for frame, description, quality in zip(episode, framewise_descriptions, framewise_quality):
                 lerobot_dataset.add_frame(
                     frame=frame,
-                    task=episode_description#[episode_description, description, quality],
+                    task=[episode_description, description, quality],
                 )
             time_end = time.time()
             logger.info(f"add_frame time: {time_end - time_start} seconds")

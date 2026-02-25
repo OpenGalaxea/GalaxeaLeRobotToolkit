@@ -1,6 +1,9 @@
 # GalaxeaLeRobotToolkit
 Convert rosbag / mcap to lerobot
 
+# For updated 1.1 Version
+  - If you run the script locally, temporary lerobot datasets before merging will be stored at /tmp
+
 ## Enviroment Requirements
 1. source Ros2 Humble setup.bash
 2. conda env with python3.10

@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 from channels_definition import *
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from edp_utils import get_raw_data_meta, get_raw_data_by_bag_name
 import numpy as np
 from pyquaternion import Quaternion as pyQuaternion
 from scipy.interpolate import interp1d
@@ -16,6 +17,10 @@ from merge_lerobot_dataset import merge_datasets
 import multiprocessing
 import cv2
 from cv_bridge import CvBridge
+from ros_bag_extract.util import extract
+from episode_parser.util import create_episode
+from feature_spec.feature import create_features
+
 # default: ROS 2
 USE_ROS1 = bool(int(os.getenv('USE_ROS1', 0)))
 # default: mp4 video
@@ -23,7 +28,7 @@ SAVE_VIDEO = bool(int(os.getenv('SAVE_VIDEO', 1)))
 # default: AV1 codec
 USE_H264 = bool(int(os.getenv('USE_H264', 0)))
 # default: original file
-USE_COMPRESSION = bool(int(os.getenv('USE_COMPRESSION', 0)))
+USE_COMPRESSION = bool(int(os.getenv('USE_COMPRESSION', 1)))
 # default: compute image stats
 IS_COMPUTE_EPISODE_STATS_IMAGE = bool(int(os.getenv('IS_COMPUTE_EPISODE_STATS_IMAGE', 1)))
 # default: 4 processes
@@ -55,7 +60,8 @@ class DataConverter:
             robot_type, 
             sample_mcap_path, 
             dataset_name, 
-            output_dir, 
+            output_dir,
+            cache_dir,
             use_ros1 = False, 
             save_video = False, 
             use_h264 = False, 
@@ -67,6 +73,7 @@ class DataConverter:
 
         self.dataset_name = dataset_name
         self.output_dir = os.path.join(output_dir, self.dataset_name)
+        self.cache_dir = cache_dir
         if os.path.exists(self.output_dir):
             shutil.rmtree(self.output_dir)
         os.makedirs(self.output_dir)
@@ -185,58 +192,6 @@ class DataConverter:
             self.arm_dof = 7
         else:
             self.arm_dof = 6
-
-    def extract(self, bag_file):
-        if not self.use_ros1:
-            return self.extract_ros2(bag_file)
-        else:
-            return self.extract_ros1(bag_file)
-
-    def extract_ros1(self, bag_file):
-        time_start = time.time()
-        extracted_msgs = {topic : [] for topic in self.TARGET_TOPICS}
-        bag = rosbag.Bag(bag_file)
-        for topic, msg, t in bag.read_messages():
-            if topic in extracted_msgs.keys():
-                extracted_msgs[topic].append(msg)
-        bag.close()
-        time_end = time.time()
-        logger.info(f"extract_ros1 time: {time_end - time_start} seconds")
-        return extracted_msgs
-
-    def extract_ros2(self, mcap_file):
-        time_start = time.time()
-        mcap_name = os.path.basename(mcap_file)
-        # logger.info(f"Loading {mcap_name} mcap file.")
-        extracted_msgs = {topic : [] for topic in self.TARGET_TOPICS}
-        reader = SequentialReader()
-        storage_options = StorageOptions(uri=mcap_file, storage_id="mcap")
-        converter_options = ConverterOptions()
-        reader.open(storage_options, converter_options)
-        topic_types = reader.get_all_topics_and_types()
-        type_map = {topic.name: topic.type for topic in topic_types}
-
-        while reader.has_next():
-            topic, data, timestamp = reader.read_next()
-            msg_type = type_map.get(topic)
-            
-            if not msg_type:
-                logger.warning(f'Unknown topic type: {topic}')
-                continue
-
-            try:
-                if topic in extracted_msgs.keys():
-                    module_name, class_name = msg_type.rsplit('/', 1)
-                    module = __import__(f'{module_name.replace("/", ".")}', fromlist=[class_name])
-                    msg_class = getattr(module, class_name)
-                    msg = deserialize_message(data, msg_class)
-                    # msg_timestamp = msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9
-                    extracted_msgs[topic].append(msg)
-            except Exception as e:
-                logger.error(f'Error processing {topic}: {str(e)}')
-        time_end = time.time()
-        logger.info(f"extract_ros2 time: {time_end - time_start} seconds")
-        return extracted_msgs
     
     def msg_to_timestamp(self, msg):
         if not self.use_ros1:
@@ -245,213 +200,6 @@ class DataConverter:
             timestamp = msg.header.stamp.to_sec()
         return timestamp
 
-    def create_features(self, frame_sample):
-        features = {}
-        # RGB
-        image_dtype = "video" if self.save_video else "image"
-        features["observation.images.head_rgb"] = {
-            "dtype": image_dtype,
-            "shape": self.shape_of_images["HEAD_LEFT_RGB"],
-            "names": ["height", "width", "channels"],
-        }
-
-        features["observation.images.head_right_rgb"] = {
-            "dtype": image_dtype,
-            "shape": self.shape_of_images["HEAD_LEFT_RGB"],
-            "names": ["height", "width", "channels"],
-        }
-
-        features["observation.images.left_wrist_rgb"] = {
-            "dtype": image_dtype,
-            "shape": self.shape_of_images["WRIST_LEFT_RGB"],
-            "names": ["height", "width", "channels"],
-        }
-
-        features["observation.images.right_wrist_rgb"] = {
-            "dtype": image_dtype,
-            "shape": self.shape_of_images["WRIST_RIGHT_RGB"],
-            "names": ["height", "width", "channels"],
-        }
-
-        # Arm Joints
-        arm_feat = {
-            "dtype": "float64",
-            "shape": (self.arm_dof,),
-            "names": None
-        }
-        features["observation.state.left_arm"] = arm_feat.copy()
-        features["observation.state.left_arm"]["names"] = [JOINT_OBS_LEFT_TOPIC+f".position[{i}]" for i in range(self.arm_dof)]
-        features["observation.state.left_arm.velocities"] = arm_feat.copy()
-        features["observation.state.left_arm.velocities"]["names"] = [JOINT_OBS_LEFT_TOPIC+f".velocity[{i}]" for i in range(self.arm_dof)]
-        features["observation.state.right_arm"] = arm_feat.copy()
-        features["observation.state.right_arm"]["names"] = [JOINT_OBS_RIGHT_TOPIC+f".position[{i}]" for i in range(self.arm_dof)]
-        features["observation.state.right_arm.velocities"] = arm_feat.copy()
-        features["observation.state.right_arm.velocities"]["names"] = [JOINT_OBS_RIGHT_TOPIC+f".velocity[{i}]" for i in range(self.arm_dof)]
-
-        imu_names = [
-            ".orientation.x",
-            ".orientation.y",
-            ".orientation.z",
-            ".orientation.w",
-            ".angular_velocity.x",
-            ".angular_velocity.y",
-            ".angular_velocity.z",
-            ".linear_acceleration.x",
-            ".linear_acceleration.y",
-            ".linear_acceleration.z"
-        ]
-        # Chassis
-        features["observation.state.chassis.imu"] = {
-            "dtype": "float64",
-            "shape": (10,),
-            "names": [CHASSIS_IMU_TOPIC+name for name in imu_names]
-        }
-
-        chassis_obs_names = [
-            ".position[0]",
-            ".position[1]",
-            ".position[2]",
-            ".velocity[0]",
-            ".velocity[1]",
-            ".velocity[2]",
-        ]
-        features["observation.state.chassis"] = {
-            "dtype": "float64",
-            "shape": (3,),
-            "names": [CHASSIS_OBS_TOPIC+name for name in chassis_obs_names[:3]]
-        }
-        features["observation.state.chassis.velocities"] = {
-            "dtype": "float64",
-            "shape": (3,),
-            "names": [CHASSIS_OBS_TOPIC+name for name in chassis_obs_names[3:]]
-        }
-
-        # Torso
-        torso_obs_names = [
-            ".position[0]",
-            ".position[1]",
-            ".position[2]",
-            ".position[3]",
-            ".velocity[0]",
-            ".velocity[1]",
-            ".velocity[2]",
-            ".velocity[3]",
-        ]
-        features["observation.state.torso"] = {
-            "dtype": "float64",
-            "shape": (4,),
-            "names": [TORSO_OBS_TOPIC+name for name in torso_obs_names[:4]]
-        }
-
-        features["observation.state.torso.velocities"] = {
-            "dtype": "float64",
-            "shape": (4,),
-            "names": [TORSO_OBS_TOPIC+name for name in torso_obs_names[4:]]
-        }
-
-        # Gripper
-        features["observation.state.left_gripper"] = {
-            "dtype": "float64",
-            "shape": (1,),
-            "names": [GRIPPER_OBS_LEFT_TOPIC+".position[0]"]
-        }
-
-        features["observation.state.right_gripper"] = {
-            "dtype": "float64",
-            "shape": (1,),
-            "names": [GRIPPER_OBS_RIGHT_TOPIC+".position[0]"]
-        }
-
-        # EE
-        eef_pose = {
-            "dtype": "float64",
-            "shape": (7,),
-            "names": None
-        }
-        pose_names = [
-            ".pose.position.x",
-            ".pose.position.y",
-            ".pose.position.z",
-            ".pose.orientation.x",
-            ".pose.orientation.y",
-            ".pose.orientation.z",
-            ".pose.orientation.w"
-        ]
-        features["observation.state.left_ee_pose"] = eef_pose.copy()
-        features["observation.state.left_ee_pose"]["names"] = [EE_POSE_OBS_LEFT_TOPIC+name for name in pose_names]
-        features["observation.state.right_ee_pose"] = eef_pose.copy()
-        features["observation.state.right_ee_pose"]["names"] = [EE_POSE_OBS_RIGHT_TOPIC+name for name in pose_names]
-
-        # Actions
-        if self.robot_type == "r1pro":
-            features["action.left_ee_pose"] = eef_pose.copy()
-            features["action.left_ee_pose"]["names"] = [EE_POSE_ACTION_LEFT_TOPIC+name for name in pose_names]
-            features["action.right_ee_pose"] = eef_pose.copy()
-            features["action.right_ee_pose"]["names"] = [EE_POSE_ACTION_RIGHT_TOPIC+name for name in pose_names]
-        
-        features["action.left_gripper"] = {
-            "dtype": "float64",
-            "shape": (1,),
-            "names": [GRIPPER_ACTION_LEFT_TOPIC+".position[0]"]
-        }
-        features["action.right_gripper"] = {
-            "dtype": "float64",
-            "shape": (1,),
-            "names": [GRIPPER_ACTION_RIGHT_TOPIC+".position[0]"]
-        }
-
-        chassis_twist_names = [
-            ".twist.linear.x",
-            ".twist.linear.y",
-            ".twist.linear.z",
-            ".twist.angular.x",
-            ".twist.angular.y",
-            ".twist.angular.z",
-        ]
-        features["action.chassis.velocities"] = {
-            "dtype": "float64", 
-            "shape": (6,), 
-            "names": [CHASSIS_ACTION_TOPIC+name for name in chassis_twist_names]
-        }
-
-        # NOTE: torso will have two different control types, and
-        # will not record both of them in the same episode.
-        if "action.torso" in frame_sample:
-            features["action.torso"] = {
-                "dtype": "float64",
-                "shape": (4,), 
-                "names": [TORSO_ACTION_TOPIC+f".position[{i}]" for i in range(4)]
-            }
-
-        if "action.torso.velocities" in frame_sample:
-            pose_names = [
-                ".twist.linear.x",
-                ".twist.linear.y",
-                ".twist.linear.z",
-                ".twist.angular.x",
-                ".twist.angular.y",
-                ".twist.angular.z",
-            ]
-            features["action.torso.velocities"] = {
-                "dtype": "float64",
-                "shape": (6,),
-                "names": [TORSO_ACTION_SPEED_TOPIC+name for name in pose_names]
-            }
-        
-        features["action.left_arm"] = {
-                "dtype": "float64",
-                "shape": (self.arm_dof,),
-                "names": None
-            }
-        features["action.left_arm"]["names"] = [JOINT_ACTION_LEFT_TOPIC+f".position[{i}]" for i in range(self.arm_dof)]
-        features["action.right_arm"] = {
-                "dtype": "float64",
-                "shape": (self.arm_dof,),
-                "names": None
-            }
-        features["action.right_arm"]["names"] = [JOINT_ACTION_RIGHT_TOPIC+f".position[{i}]" for i in range(self.arm_dof)]
-        
-        return features
 
     def process_all(self, mcaps_dict: dict):
         start_time = time.time()
@@ -483,6 +231,19 @@ class DataConverter:
             logger.info(f'Completed processing {idx+1}: {mcap_file}')
             break
         
+    def compress_lerobot_ds(self,):
+        if self.use_compression:
+            def add_to_tar(tar, file_path):
+                tar.add(file_path, arcname=os.path.basename(file_path))
+            files = [os.path.join(self.cache_dir, self.dataset_name)]
+            output_tar = os.path.join(self.cache_dir, f"{self.dataset_name}.tar.gz")
+            with tarfile.open(output_tar, "w:gz") as tar:
+                for file in files:
+                    try:
+                        add_to_tar(tar, file)
+                    except Exception as e:
+                        print(f"Error adding {file} to tar: {e}")
+            shutil.move(output_tar, self.output_dir)
 
     def process(
             self, 
@@ -491,7 +252,7 @@ class DataConverter:
         ):
         start_time = time.time()
         mcap_path = mcap_info["path"]
-        processed_msgs = self.extract(mcap_path)
+        processed_msgs = extract(mcap_path, self.use_ros1, self.TARGET_TOPICS)
         head_rgb_timestamps = np.array([self.msg_to_timestamp(msg) for msg in processed_msgs[RGB_HEAD_LEFT_TOPIC]])
         fps = int(np.round(1.0 / np.median(head_rgb_timestamps[1:] - head_rgb_timestamps[:-1])))
         self.fps_dict[str(idx)] = fps
@@ -665,13 +426,13 @@ class DataConverter:
                     joint_dict_list.append(joint_dict)
                 processed_msgs[topic] = joint_dict_list
 
-        episode = self.create_episode(processed_msgs)
-        features = self.create_features(episode[0])
+        episode = create_episode(processed_msgs, self.RGB_WRIST_LEFT_TOPIC, self.RGB_WRIST_RIGHT_TOPIC, self.arm_dof, self.robot_type)
+        features = create_features(episode[0], self.arm_dof, self.save_video, self.shape_of_images, self.robot_type)
         lerobot_dataset = LeRobotDataset.create(
             repo_id=f'Galaxea/{self.dataset_name}_{idx}',
             features=features,
             robot_type=self.robot_type,
-            root=os.path.join(self.output_dir, self.dataset_name) + f'_{idx}',
+            root=os.path.join(self.cache_dir, self.dataset_name) + f'_{idx}',
             fps=fps,
         )
 
@@ -716,7 +477,7 @@ class DataConverter:
             for frame, description, quality in zip(episode, framewise_descriptions, framewise_quality):
                 lerobot_dataset.add_frame(
                     frame=frame,
-                    task=episode_description#[episode_description, description, quality],
+                    task=[episode_description, description, quality],
                 )
             time_end = time.time()
             logger.info(f"add_frame time: {time_end - time_start} seconds")
@@ -729,59 +490,15 @@ class DataConverter:
             return (mcap_path, "failed")
 
     
-    def create_episode(self, processed_dataset):
-        episode = []
-        for i in range(len(processed_dataset[RGB_HEAD_LEFT_TOPIC][0])):
-            frame = {}
-            frame["observation.images.head_rgb"] = processed_dataset[RGB_HEAD_LEFT_TOPIC][0][i]
-            frame["observation.images.head_right_rgb"] = processed_dataset[RGB_HEAD_RIGHT_TOPIC][0][i]
-            frame["observation.images.left_wrist_rgb"] = processed_dataset[self.RGB_WRIST_LEFT_TOPIC][0][i]
-            frame["observation.images.right_wrist_rgb"] = processed_dataset[self.RGB_WRIST_RIGHT_TOPIC][0][i]
-            
-            frame["observation.state.left_arm"] = processed_dataset[JOINT_OBS_LEFT_TOPIC][0]["position"][i][0: self.arm_dof]
-            frame["observation.state.left_arm.velocities"] = processed_dataset[JOINT_OBS_LEFT_TOPIC][0]["velocity"][i][0: self.arm_dof]
-            frame["observation.state.right_arm"] = processed_dataset[JOINT_OBS_RIGHT_TOPIC][0]["position"][i][0: self.arm_dof]
-            frame["observation.state.right_arm.velocities"] = processed_dataset[JOINT_OBS_RIGHT_TOPIC][0]["velocity"][i][0: self.arm_dof]
-            frame["observation.state.left_gripper"] = processed_dataset[GRIPPER_OBS_LEFT_TOPIC][0]["position"][i]
-            frame["observation.state.right_gripper"] = processed_dataset[GRIPPER_OBS_RIGHT_TOPIC][0]["position"][i]
-            frame["observation.state.chassis.imu"] = processed_dataset[CHASSIS_IMU_TOPIC][0][i]
-            frame["observation.state.chassis"] = processed_dataset[CHASSIS_OBS_TOPIC][0]['position'][i][0:3]
-            # FIXME: The feedback for the chassis provides a 6-dim velocity, 
-            # but only the first 3 dims are valid. The last 3 dims do not change.
-            frame["observation.state.chassis.velocities"] = processed_dataset[CHASSIS_OBS_TOPIC][0]['velocity'][i][0:3]
-            frame["observation.state.torso"] = processed_dataset[TORSO_OBS_TOPIC][0]["position"][i]
-            frame["observation.state.torso.velocities"] = processed_dataset[TORSO_OBS_TOPIC][0]["velocity"][i]
-            frame["observation.state.left_ee_pose"] = processed_dataset[EE_POSE_OBS_LEFT_TOPIC][0][i]
-            frame["observation.state.right_ee_pose"] = processed_dataset[EE_POSE_OBS_RIGHT_TOPIC][0][i]
-            
-            if self.robot_type == "r1pro":
-                frame["action.left_ee_pose"] = processed_dataset[EE_POSE_ACTION_LEFT_TOPIC][0][i]
-                frame["action.right_ee_pose"] = processed_dataset[EE_POSE_ACTION_RIGHT_TOPIC][0][i]
-            
-            frame["action.left_gripper"] = processed_dataset[GRIPPER_ACTION_LEFT_TOPIC][0][i]
-            frame["action.right_gripper"] = processed_dataset[GRIPPER_ACTION_RIGHT_TOPIC][0][i]
-            frame["action.left_arm"] = processed_dataset[JOINT_ACTION_LEFT_TOPIC][0]["position"][i]
-            frame["action.right_arm"] = processed_dataset[JOINT_ACTION_RIGHT_TOPIC][0]["position"][i]
-            frame["action.chassis.velocities"] = processed_dataset[CHASSIS_ACTION_TOPIC][0][i]
-            
-            # only R1 Pro with whole-body control has torso joint action, while R1 Lite still uses torso speed control
-            if self.robot_type == "r1pro" and len(processed_dataset[TORSO_ACTION_TOPIC][0]["position"]) > 0:
-                frame["action.torso"] = processed_dataset[TORSO_ACTION_TOPIC][0]["position"][i]
-            if self.robot_type == "r1lite" and len(processed_dataset[TORSO_ACTION_SPEED_TOPIC][0]) > 0:
-                frame["action.torso.velocities"] = processed_dataset[TORSO_ACTION_SPEED_TOPIC][0][i]
-
-            episode.append(frame)
-        
-        return episode
     
     def merge_subdataset(self,):
         subdatasets = []
-        for entry in os.scandir(self.output_dir):
+        for entry in os.scandir(self.cache_dir):
             if entry.is_dir():
                 full_path = entry.path
                 subdatasets.append(full_path)
         subdatasets = sorted(subdatasets)
-        logger.info(f'Start merging:\n {subdatasets}\n To: {self.output_dir}/{self.dataset_name}')
+        logger.info(f'Start merging:\n {subdatasets}\n To: {self.cache_dir}/{self.dataset_name}')
 
         sum_fps = 0
         count = 0
@@ -792,7 +509,7 @@ class DataConverter:
 
         merge_datasets(
             source_folders=subdatasets,
-            output_folder=os.path.join(self.output_dir, self.dataset_name),
+            output_folder=os.path.join(self.cache_dir, self.dataset_name),
             default_fps=mean_fps, 
         )
     
@@ -942,6 +659,11 @@ def get_raw_data_meta_from_args():
     dataset_name = args.dataset_name
     robot_type = args.robot_type
     output_dir = args.output_dir
+    cache_dir = f"/tmp/{args.dataset_name}/"
+    if os.path.exists(cache_dir):
+        shutil.rmtree(cache_dir)
+    os.makedirs(cache_dir)
+
     data_path_list = search_rosbags(args.input_dir)
 
     raw_data_meta_path = os.path.join(args.input_dir, "raw_data_meta.json")
@@ -962,7 +684,7 @@ def get_raw_data_meta_from_args():
             raw_data_meta_dict["rawDataList"].append(data_meta)
 
         raw_data_meta_json = dict(data=raw_data_meta_dict)
-    return (raw_data_meta_json, output_dir)
+    return (raw_data_meta_json, cache_dir, output_dir)
 
 def format_shelf_string(s):
     parts = s.split('_')
@@ -972,7 +694,10 @@ def format_shelf_string(s):
     return result
 
 if __name__ == '__main__':
-    raw_data_meta_json, output_dir = get_raw_data_meta_from_args()
+    if os.path.exists("/edp-workspace/instance-env/"):
+        raw_data_meta_json, cache_dir, output_dir = get_raw_data_meta()
+    else:
+        raw_data_meta_json, cache_dir, output_dir = get_raw_data_meta_from_args()
 
     mcaps_dict = raw_data_meta_json['data']
     dataset_name = mcaps_dict['rawDataSetName']
@@ -1002,17 +727,19 @@ if __name__ == '__main__':
         exit(1)
 
     try:
-        training_data_set_meta_file = os.path.join(output_dir, 'training_data_set_meta.json')
+        training_data_set_meta_file = os.path.join(cache_dir, 'training_data_set_meta.json')
         with open(training_data_set_meta_file, "w", encoding="utf-8") as f:
             json.dump(mcaps_dict, f, indent=4)
     except Exception as e:
+        print("No you dont")
         logger.error(f'Error writing {training_data_set_meta_file}, {e}')
 
     data_converter = DataConverter(
         robot_type, 
         sample_mcap_path, 
         dataset_name, 
-        output_dir, 
+        output_dir,
+        cache_dir,
         use_ros1=USE_ROS1, 
         save_video=SAVE_VIDEO, 
         use_h264=USE_H264, 
@@ -1025,5 +752,7 @@ if __name__ == '__main__':
     # 2. process messages.
     data_converter.process_all(mcaps_dict)
 
+    data_converter.compress_lerobot_ds()
+    
     if not USE_ROS1:    
         rclpy.shutdown()
